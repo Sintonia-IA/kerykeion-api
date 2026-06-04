@@ -14,10 +14,12 @@ class NatalRequest(BaseModel):
     day: int
     hour: int
     minute: int
-    city: str
-    nation: str
+    city: Optional[str] = "Buenos Aires"
+    nation: Optional[str] = "AR"
     lat: Optional[float] = None
+    lon: Optional[float] = None
     lng: Optional[float] = None
+    tz: Optional[str] = None
     tz_str: Optional[str] = None
 
 
@@ -96,15 +98,19 @@ def make_subject(data: NatalRequest) -> AstrologicalSubject:
         "day": data.day,
         "hour": data.hour,
         "minute": data.minute,
-        "city": data.city,
-        "nation": data.nation,
+        "city": data.city or "Buenos Aires",
+        "nation": data.nation or "AR",
     }
     if data.lat is not None:
         kwargs["lat"] = data.lat
-    if data.lng is not None:
-        kwargs["lng"] = data.lng
-    if data.tz_str is not None:
-        kwargs["tz_str"] = data.tz_str
+    # Acepta tanto lng como lon
+    lng = data.lng if data.lng is not None else data.lon
+    if lng is not None:
+        kwargs["lng"] = lng
+    # Acepta tanto tz_str como tz
+    tz = data.tz_str if data.tz_str is not None else data.tz
+    if tz is not None:
+        kwargs["tz_str"] = tz
     return AstrologicalSubject(**kwargs)
 
 
