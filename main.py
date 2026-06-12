@@ -4,7 +4,24 @@ from typing import Optional
 from kerykeion import AstrologicalSubject, SynastryAspects
 import uvicorn
 
-app = FastAPI(title="SintonÍA Astrology API", version="1.0.0")
+app = FastAPI(title="SintonÍA Astrology API", version="1.1.0")
+
+# Planetas base (sin nodos: los nodos se agregan aparte porque cambiaron de nombre
+# entre versiones de Kerykeion).
+BASE_PLANETS = [
+    "sun", "moon", "mercury", "venus", "mars",
+    "jupiter", "saturn", "uranus", "neptune", "pluto",
+    "chiron",
+]
+
+# Nombres candidatos de los nodos, de la versión nueva a la vieja de Kerykeion.
+# La versión nueva usa *_lunar_node; versiones viejas usaban true_node / mean_node.
+NORTH_NODE_ATTRS = ["true_north_lunar_node", "mean_north_lunar_node", "true_node", "mean_node"]
+SOUTH_NODE_ATTRS = ["true_south_lunar_node", "mean_south_lunar_node", "true_south_node", "mean_south_node"]
+
+SIGNS = ["Ari", "Tau", "Gem", "Can", "Leo", "Vir", "Lib", "Sco", "Sag", "Cap", "Aqu", "Pis"]
+ORDINALS = ["First", "Second", "Third", "Fourth", "Fifth", "Sixth",
+            "Seventh", "Eighth", "Ninth", "Tenth", "Eleventh", "Twelfth"]
 
 
 class NatalRequest(BaseModel):
@@ -28,45 +45,88 @@ class SynastryRequest(BaseModel):
     person_b: NatalRequest
 
 
+def _point_dict(obj) -> dict:
+    return {
+        "name": obj.name,
+        "sign": obj.sign,
+        "sign_num": obj.sign_num,
+        "position": round(obj.position, 4),
+        "abs_pos": round(obj.abs_pos, 4),
+        "house": obj.house,
+        "retrograde": obj.retrograde,
+    }
+
+
+def _first_attr(s, attrs):
+    """Devuelve el primer atributo existente y no nulo de la lista."""
+    for a in attrs:
+        obj = getattr(s, a, None)
+        if obj is not None:
+            return obj
+    return None
+
+
+def _house_from_abs(abs_pos: float, houses: dict) -> Optional[str]:
+    """Calcula en qué casa cae un grado absoluto, comparando contra las cúspides."""
+    if not houses:
+        return None
+    cusps = []
+    for i in range(1, 13):
+        h = houses.get(f"house_{i}")
+        if not h:
+            return None
+        cusps.append(h["abs_pos"])
+    for i in range(12):
+        start = cusps[i]
+        end = cusps[(i + 1) % 12]
+        if start <= end:
+            inside = start <= abs_pos < end
+        else:  # la casa cruza 0°
+            inside = abs_pos >= start or abs_pos < end
+        if inside:
+            return f"{ORDINALS[i]}_House"
+    return None
+
+
 def subject_to_dict(s: AstrologicalSubject) -> dict:
     planets = {}
-    for planet in [
-        "sun", "moon", "mercury", "venus", "mars",
-        "jupiter", "saturn", "uranus", "neptune", "pluto",
-        "mean_node", "chiron"
-    ]:
+    for planet in BASE_PLANETS:
         obj = getattr(s, planet, None)
         if obj:
-            planets[planet] = {
-                "name": obj.name,
-                "sign": obj.sign,
-                "sign_num": obj.sign_num,
-                "position": round(obj.position, 4),
-                "abs_pos": round(obj.abs_pos, 4),
-                "house": obj.house,
-                "retrograde": obj.retrograde,
-            }
+            planets[planet] = _point_dict(obj)
 
     houses = {}
-    for i in range(1, 13):
-        house = getattr(s, f"first_house" if i == 1 else
-                        f"second_house" if i == 2 else
-                        f"third_house" if i == 3 else
-                        f"fourth_house" if i == 4 else
-                        f"fifth_house" if i == 5 else
-                        f"sixth_house" if i == 6 else
-                        f"seventh_house" if i == 7 else
-                        f"eighth_house" if i == 8 else
-                        f"ninth_house" if i == 9 else
-                        f"tenth_house" if i == 10 else
-                        f"eleventh_house" if i == 11 else
-                        f"twelfth_house", None)
+    house_attrs = [f"{ORDINALS[i].lower()}_house" for i in range(12)]
+    for i, attr in enumerate(house_attrs, start=1):
+        house = getattr(s, attr, None)
         if house:
             houses[f"house_{i}"] = {
                 "sign": house.sign,
                 "position": round(house.position, 4),
                 "abs_pos": round(house.abs_pos, 4),
             }
+
+    # --- Nodos lunares (eje nodal / dirección del alma) ---
+    north = _first_attr(s, NORTH_NODE_ATTRS)
+    if north is not None:
+        planets["north_node"] = _point_dict(north)
+
+    south = _first_attr(s, SOUTH_NODE_ATTRS)
+    if south is not None:
+        planets["south_node"] = _point_dict(south)
+    elif north is not None:
+        # Fallback: el Nodo Sur es el punto opuesto exacto al Nodo Norte.
+        south_abs = (north.abs_pos + 180.0) % 360.0
+        sign_idx = int(south_abs // 30)
+        planets["south_node"] = {
+            "name": "South_Node",
+            "sign": SIGNS[sign_idx],
+            "sign_num": sign_idx,
+            "position": round(south_abs % 30, 4),
+            "abs_pos": round(south_abs, 4),
+            "house": _house_from_abs(south_abs, houses),
+            "retrograde": getattr(north, "retrograde", True),
+        }
 
     return {
         "name": s.name,
@@ -117,6 +177,27 @@ def make_subject(data: NatalRequest) -> AstrologicalSubject:
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "SintonÍA Astrology API"}
+
+
+@app.get("/debug/points")
+def debug_points():
+    """Temporal: lista los atributos del subject relacionados con nodos y su valor.
+    Sirve para confirmar los nombres reales en la versión de Kerykeion desplegada."""
+    s = AstrologicalSubject("Debug", 1988, 3, 15, 14, 30,
+                            lng=-58.3816, lat=-34.6037,
+                            tz_str="America/Argentina/Buenos_Aires",
+                            city="Buenos Aires", nation="AR")
+    node_attrs = [a for a in dir(s) if "node" in a.lower() and not a.startswith("_")]
+    out = {}
+    for a in node_attrs:
+        obj = getattr(s, a, None)
+        if obj is not None and hasattr(obj, "sign"):
+            out[a] = {"name": getattr(obj, "name", None), "sign": obj.sign,
+                      "position": round(getattr(obj, "position", 0), 2),
+                      "house": getattr(obj, "house", None)}
+        else:
+            out[a] = repr(obj)
+    return {"node_like_attrs": node_attrs, "values": out}
 
 
 @app.post("/natal")
