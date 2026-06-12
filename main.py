@@ -179,27 +179,6 @@ def health():
     return {"status": "ok", "service": "SintonÍA Astrology API"}
 
 
-@app.get("/debug/points")
-def debug_points():
-    """Temporal: lista los atributos del subject relacionados con nodos y su valor.
-    Sirve para confirmar los nombres reales en la versión de Kerykeion desplegada."""
-    s = AstrologicalSubject("Debug", 1988, 3, 15, 14, 30,
-                            lng=-58.3816, lat=-34.6037,
-                            tz_str="America/Argentina/Buenos_Aires",
-                            city="Buenos Aires", nation="AR")
-    node_attrs = [a for a in dir(s) if "node" in a.lower() and not a.startswith("_")]
-    out = {}
-    for a in node_attrs:
-        obj = getattr(s, a, None)
-        if obj is not None and hasattr(obj, "sign"):
-            out[a] = {"name": getattr(obj, "name", None), "sign": obj.sign,
-                      "position": round(getattr(obj, "position", 0), 2),
-                      "house": getattr(obj, "house", None)}
-        else:
-            out[a] = repr(obj)
-    return {"node_like_attrs": node_attrs, "values": out}
-
-
 @app.post("/natal")
 def natal(request: NatalRequest):
     try:
